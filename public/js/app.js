@@ -5,6 +5,15 @@ const loginForm = document.getElementById('login-form');
 const loginError = document.getElementById('login-error');
 const devicesContainer = document.getElementById('devices-container');
 
+// --- Application State ---
+let allDevices = [];
+let currentTagFilter = 'all';
+
+function setFilter(tag) {
+    currentTagFilter = tag;
+    renderDevices(allDevices); // Re-render instantly using memory
+}
+
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', checkSession);
 
@@ -15,9 +24,9 @@ async function checkSession() {
     if (res.status === 401) {
         showLogin();
     } else if (res.ok) {
-        const devices = await res.json();
+        allDevices = await res.json();
         showDashboard();
-        renderDevices(devices);
+        renderDevices(allDevices);
     }
 }
 
@@ -62,8 +71,9 @@ function showDashboard() {
 async function fetchAndRender() {
     const res = await fetch('/api/devices');
     if (res.status === 401) return showLogin();
-    const devices = await res.json();
-    renderDevices(devices);
+    // Save to state before rendering
+    allDevices = await res.json();
+    renderDevices(allDevices);
 }
 
 async function createDevice() {
@@ -171,14 +181,19 @@ function renderDevices(devices) {
     devicesContainer.innerHTML = '';
 
     // 1. Calculate Tag States
-    const tagMap = {}; // { "alex": { total: 3, blocked: 1 } }
+    const tagMap = {};
+    let untaggedCount = 0;
 
     devices.forEach(d => {
-        (d.tags || []).forEach(tag => {
-            if (!tagMap[tag]) tagMap[tag] = { total: 0, blocked: 0 };
-            tagMap[tag].total++;
-            if (d.is_blocked) tagMap[tag].blocked++;
-        });
+        if (!d.tags || d.tags.length === 0) {
+            untaggedCount++;
+        } else {
+            d.tags.forEach(tag => {
+                if (!tagMap[tag]) tagMap[tag] = { total: 0, blocked: 0 };
+                tagMap[tag].total++;
+                if (d.is_blocked) tagMap[tag].blocked++;
+            });
+        }
     });
 
     // 2. Render Tag Control Center
@@ -186,36 +201,66 @@ function renderDevices(devices) {
     const tagContainer = document.getElementById('tag-controls-container');
     tagControlsDiv.innerHTML = '';
 
-    const uniqueTags = Object.keys(tagMap).sort();
-    if (uniqueTags.length > 0) {
-        tagContainer.classList.remove('hidden');
-        uniqueTags.forEach(tag => {
-            const stats = tagMap[tag];
-            const isAllBlocked = stats.blocked === stats.total;
-            const isMixed = stats.blocked > 0 && stats.blocked < stats.total;
+    // Always show Tag Control Center now
+    tagContainer.classList.remove('hidden');
 
-            // Determine styling based on state
-            let bgClass = 'bg-gray-200'; // Unblocked
-            if (isAllBlocked) bgClass = 'bg-red-500';
-            else if (isMixed) bgClass = 'bg-yellow-400';
+    // Helper functions for pill styling based on active filter
+    const getPillClasses = (tagId) => currentTagFilter === tagId
+        ? 'bg-brand-50 border-brand-300 ring-1 ring-brand-300'
+        : 'bg-white border-gray-200 hover:bg-gray-50';
+    const getTextColor = (tagId) => currentTagFilter === tagId
+        ? 'text-brand-800'
+        : 'text-gray-700';
 
-            tagControlsDiv.innerHTML += `
-                <div class="flex items-center bg-white border border-gray-200 shadow-sm rounded-full pl-3 pr-1 py-1 gap-3">
-                    <span class="text-sm font-bold text-gray-700">${tag} <span class="text-xs text-gray-400 font-normal">(${stats.total})</span></span>
-                    
-                    <div class="relative inline-block w-10 align-middle select-none transition duration-200 ease-in" title="${isMixed ? 'Mixed State - Click to sync' : ''}">
-                        <input type="checkbox" id="tag-toggle-${tag}" onchange="toggleTagGroup('${tag}', this.checked)" ${isAllBlocked ? 'checked' : ''} class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer z-10 transition-all duration-300"/>
-                        <label for="tag-toggle-${tag}" class="block overflow-hidden h-5 rounded-full ${bgClass} cursor-pointer transition-colors duration-300"></label>
-                    </div>
-                </div>
-            `;
-        });
-    } else {
-        tagContainer.classList.add('hidden');
+    // Render "All Devices" Filter
+    tagControlsDiv.innerHTML += `
+        <div onclick="setFilter('all')" class="flex items-center border shadow-sm rounded-full px-4 py-1.5 cursor-pointer transition-colors ${getPillClasses('all')}">
+            <span class="text-sm font-bold ${getTextColor('all')}">All Devices <span class="text-xs font-normal opacity-70">(${devices.length})</span></span>
+        </div>
+    `;
+
+    // Render "Ungrouped (No-Tag)" Filter
+    if (untaggedCount > 0) {
+        tagControlsDiv.innerHTML += `
+            <div onclick="setFilter('no-tag')" class="flex items-center border shadow-sm rounded-full px-4 py-1.5 cursor-pointer transition-colors ${getPillClasses('no-tag')}">
+                <span class="text-sm font-bold ${getTextColor('no-tag')}">Ungrouped <span class="text-xs font-normal opacity-70">(${untaggedCount})</span></span>
+            </div>
+        `;
     }
+
+    // Render Dynamic Tag Filters
+    const uniqueTags = Object.keys(tagMap).sort();
+    uniqueTags.forEach(tag => {
+        const stats = tagMap[tag];
+        const isAllBlocked = stats.blocked === stats.total;
+        const isMixed = stats.blocked > 0 && stats.blocked < stats.total;
+
+        let toggleBg = 'bg-gray-200';
+        if (isAllBlocked) toggleBg = 'bg-red-500';
+        else if (isMixed) toggleBg = 'bg-yellow-400';
+
+        tagControlsDiv.innerHTML += `
+            <div onclick="setFilter('${tag}')" class="flex items-center border shadow-sm rounded-full pl-3 pr-1 py-1 gap-3 cursor-pointer transition-colors ${getPillClasses(tag)}">
+                <span class="text-sm font-bold ${getTextColor(tag)}">${tag} <span class="text-xs font-normal opacity-70">(${stats.total})</span></span>
+                
+                <!-- Use stopPropagation so clicking the switch doesn't accidentally trigger the filter click -->
+                <div onclick="event.stopPropagation()" class="relative inline-block w-10 align-middle select-none transition duration-200 ease-in" title="${isMixed ? 'Mixed State - Click to sync' : ''}">
+                    <input type="checkbox" id="tag-toggle-${tag}" onchange="toggleTagGroup('${tag}', this.checked)" ${isAllBlocked ? 'checked' : ''} class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer z-10 transition-all duration-300"/>
+                    <label for="tag-toggle-${tag}" class="block overflow-hidden h-5 rounded-full ${toggleBg} cursor-pointer transition-colors duration-300"></label>
+                </div>
+            </div>
+        `;
+    });
 
     // 3. Render Individual Devices
     devices.forEach(d => {
+        // --- APPLY THE FILTER ---
+        if (currentTagFilter !== 'all') {
+            const hasTags = d.tags && d.tags.length > 0;
+            if (currentTagFilter === 'no-tag' && hasTags) return; // Skip tagged devices
+            if (currentTagFilter !== 'no-tag' && (!hasTags || !d.tags.includes(currentTagFilter))) return; // Skip if it doesn't have the active tag
+        }
+
         // Build Tags HTML for the card
         const tagsPills = (d.tags || []).map(t =>
             `<span class="bg-brand-100 text-brand-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide border border-brand-200">${t}</span>`
@@ -244,14 +289,12 @@ function renderDevices(devices) {
                 </div>
             </div>
 
+            <!-- Tags Section -->
             <div class="mb-4 min-h-[28px]">
-                <!-- Display Mode -->
                 <div id="tags-display-${d.id}" class="flex items-center flex-wrap gap-1">
                     ${tagsPills}
                     <button onclick="enableTagEdit(${d.id})" class="text-[10px] text-gray-400 hover:text-brand-600 ml-1 underline bg-gray-50 px-2 py-0.5 rounded border border-gray-200 transition-colors">Edit Tags</button>
                 </div>
-                
-                <!-- Edit Mode -->
                 <div id="tags-edit-${d.id}" class="hidden flex items-center gap-1">
                     <input type="text" id="tag-input-${d.id}" value="${(d.tags || []).join(', ')}" placeholder="e.g., kids, tablet" 
                         class="flex-grow text-xs px-2 py-1.5 border border-brand-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 shadow-inner"
