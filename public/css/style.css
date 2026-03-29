@@ -1,0 +1,13 @@
+/* Custom utilities not covered by standard Tailwind */
+.hidden-view {
+    display: none !important;
+}
+
+/* Smooth transitions for our toggle switches */
+.toggle-checkbox:checked {
+    right: 0;
+    border-color: #68D391;
+}
+.toggle-checkbox:checked + .toggle-label {
+    background-color: #ef4444; /* Red when blocked */
+}

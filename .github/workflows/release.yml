@@ -1,0 +1,66 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build FreeBSD Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21' # Adjust to your version if needed
+          cache: true
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Build Binaries (FreeBSD amd64)
+        run: |
+          mkdir -p build/public build/scripts
+          
+          # 1. Build main web app
+          GOOS=freebsd GOARCH=amd64 go build -o build/pf-warden .
+          
+          # 2. Build CLI sync tool
+          cd cmd/pf-block-sync
+          GOOS=freebsd GOARCH=amd64 go build -o ../../build/pf-block-sync .
+          cd ../..
+
+      - name: Prepare Package
+        run: |
+          # Copy static assets and scripts
+          cp -r public/* build/public/
+          cp -r scripts/* build/scripts/
+          cp LICENSE build/ || true
+          
+          # Create the tarball
+          # -C build tells tar to change into that directory so the archive doesn't have a "build/" prefix
+          tar -czvf pf-warden-freebsd-amd64.tar.gz -C build .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pf-warden-freebsd-amd64
+          path: pf-warden-freebsd-amd64.tar.gz
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pf-warden-freebsd-amd64.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false

@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# rc.d script for pf-warden
+# path: /usr/local/etc/rc.d/pfwarden
+# PROVIDE: pfwarden
+# REQUIRE: LOGIN DAEMON NETWORKING pf
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="pfwarden"
+rcvar="pfwarden_enable"
+
+# Load settings from /etc/rc.conf
+load_rc_config $name
+
+: ${pfwarden_enable:="NO"}
+: ${pfwarden_user:="pfwarden"}
+: ${pfwarden_group:="wheel"}
+: ${pfwarden_chdir:="/usr/local/share/pf-warden"}
+
+# Environment variables for the Go App
+# These match the PFW_ variables we set up in main.go
+export PFW_DB_PATH="/var/db/pf-warden/pf_warden.db"
+export PFW_PUBLIC_DIR="/usr/local/share/pf-warden/public"
+export PFW_LISTEN_ADDR=":8080"
+export PFW_DHCP_LEASES="/var/db/dhcpd/dhcpd.leases"
+export PFW_DHCP_CONF="/usr/local/etc/dhcpd.conf"
+export PFW_WRAPPER_CMD="doas"
+export PFW_WRAPPER_ARGS="/usr/local/bin/pf-block-sync"
+
+# Logging
+pfwarden_log="/var/log/pf-warden.log"
+
+command="/usr/local/bin/pf-warden"
+command_args=">> ${pfwarden_log} 2>&1 &"
+
+# We use a custom start command to handle the backgrounding and logging
+start_cmd="pfwarden_start"
+
+pfwarden_start() {
+    echo "Starting pf-warden..."
+    # Ensure log file exists and is writable
+    touch ${pfwarden_log}
+    chown ${pfwarden_user}:${pfwarden_group} ${pfwarden_log}
+    
+    # Run the command as the service user
+    /usr/sbin/daemon -u ${pfwarden_user} -f -p /var/run/${name}.pid -o ${pfwarden_log} ${command}
+}
+
+run_rc_command "$1"
