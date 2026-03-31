@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kbhuyan/pf-warden/db"
+	"github.com/kbhuyan/pf-warden/network"
 )
 
 // --- Data Models ---
@@ -20,10 +21,11 @@ type Device struct {
 }
 
 type MacAddr struct {
-	ID            int    `json:"id"`
-	DeviceID      int    `json:"device_id"`
-	MacAddress    string `json:"mac_address"`
-	InterfaceType string `json:"interface_type"`
+	ID            int                      `json:"id"`
+	DeviceID      int                      `json:"device_id"`
+	MacAddress    string                   `json:"mac_address"`
+	InterfaceType string                   `json:"interface_type"`
+	LiveInfo      *network.LiveNetworkInfo `json:"live_info"`
 }
 
 // --- Handlers ---
@@ -58,6 +60,8 @@ func GetDevices(c *gin.Context) {
 	}
 
 	// 2. Fetch all MACs and attach them to their devices
+	// also update the live info for each mac
+	network.CacheLock.RLock() // Use Read-Lock for thread safety
 	macRows, err := db.DB.Query("SELECT id, device_id, mac_address, interface_type FROM device_macs")
 	if err == nil {
 		defer macRows.Close()
@@ -65,11 +69,16 @@ func GetDevices(c *gin.Context) {
 			var m MacAddr
 			if err := macRows.Scan(&m.ID, &m.DeviceID, &m.MacAddress, &m.InterfaceType); err == nil {
 				if dev, exists := deviceMap[m.DeviceID]; exists {
+					// LOOKUP IN CACHE
+					if info, found := network.LiveCache[strings.ToLower(m.MacAddress)]; found {
+						m.LiveInfo = &info
+					}
 					dev.MACs = append(dev.MACs, m)
 				}
 			}
 		}
 	}
+	network.CacheLock.RUnlock()
 
 	// Return empty array instead of null if no devices exist
 	if devices == nil {

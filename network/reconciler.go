@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,6 +18,18 @@ type Config struct {
 	WrapperCmd     string
 	WrapperArgs    []string
 }
+
+// LiveNetworkInfo stores discovered IPs and their sources for a MAC
+type LiveNetworkInfo struct {
+	// Key: IP address, Value: Set of sources (arp, dhcp, static)
+	IPs map[string][]string `json:"ips"`
+}
+
+var (
+	// LiveCache holds the global real-time state [mac] -> LiveNetworkInfo
+	LiveCache = make(map[string]LiveNetworkInfo)
+	CacheLock sync.RWMutex
+)
 
 func StartReconciler(db *sql.DB, interval time.Duration, cfg *Config) {
 	log.Printf("Starting Network Reconciler loop (every %v)", interval)
@@ -29,6 +43,40 @@ func StartReconciler(db *sql.DB, interval time.Duration, cfg *Config) {
 }
 
 func reconcile(db *sql.DB, cfg *Config) {
+	// 1. Gather network state from all 3 sources
+	arpMap := GetArpLeases()
+	dhcpMap := GetCurrentLeases(cfg.DHCPLeasesFile)
+	staticMap := GetStaticReservations(cfg.DHCPConfFile)
+
+	// --- NEW: Update the Global Live Cache ---
+	newCache := make(map[string]LiveNetworkInfo)
+
+	updateCache := func(mac, ip, source string) {
+		mac = strings.ToLower(mac)
+		if _, exists := newCache[mac]; !exists {
+			newCache[mac] = LiveNetworkInfo{IPs: make(map[string][]string)}
+		}
+		// Add source to the IP if not already there
+		if !slices.Contains(newCache[mac].IPs[ip], source) {
+			newCache[mac].IPs[ip] = append(newCache[mac].IPs[ip], source)
+		}
+	}
+
+	for mac, ip := range arpMap {
+		updateCache(mac, ip, "arp")
+	}
+	for mac, ip := range dhcpMap {
+		updateCache(mac, ip, "dhcp")
+	}
+	for mac, ip := range staticMap {
+		updateCache(mac, ip, "static")
+	}
+
+	CacheLock.Lock()
+	LiveCache = newCache
+	CacheLock.Unlock()
+	// --- End Cache Update ---
+
 	// 1. Get all MAC addresses that belong to blocked devices
 	query := `
 		SELECT m.mac_address 
@@ -56,11 +104,6 @@ func reconcile(db *sql.DB, cfg *Config) {
 		pushToFirewall([]string{}, cfg)
 		return
 	}
-
-	// 2. Gather network state from all 3 sources
-	arpMap := GetArpLeases()
-	dhcpMap := GetCurrentLeases(cfg.DHCPLeasesFile)
-	staticMap := GetStaticReservations(cfg.DHCPConfFile)
 
 	// 3. Find active IPs for the blocked MACs (using a Set to avoid duplicates)
 	blockedIPs := make(map[string]bool)

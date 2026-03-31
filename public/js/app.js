@@ -266,16 +266,40 @@ function renderDevices(devices) {
             `<span class="bg-brand-100 text-brand-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide border border-brand-200">${t}</span>`
         ).join(' ');
 
-        // Build MAC list HTML
-        const macsHtml = (d.macs || []).map(m => `
-            <div class="flex justify-between items-center bg-gray-50 px-3 py-2 rounded text-sm mb-2 border border-gray-100 shadow-sm overflow-hidden">
-                <div class="flex-grow truncate mr-2">
-                    <span class="font-mono text-gray-700 text-xs sm:text-sm">${m.mac_address}</span>
-                    <span class="text-[10px] sm:text-xs text-gray-400 uppercase tracking-wide ml-1">(${m.interface_type})</span>
+        // Build MAC list HTML with Live IP detection
+        const macsHtml = (d.macs || []).map(m => {
+            let liveHtml = '';
+            if (m.live_info && m.live_info.ips) {
+                // Loop through all IPs found for this MAC
+                Object.entries(m.live_info.ips).forEach(([ip, sources]) => {
+                    const icons = sources.map(s => {
+                        if (s === 'static') return '<span title="Static Reservation">📌</span>';
+                        if (s === 'dhcp') return '<span title="DHCP Lease">⏳</span>';
+                        if (s === 'arp') return '<span title="Active on Network">📡</span>';
+                        return '';
+                    }).join('');
+
+                    liveHtml += `
+                        <div class="flex items-center gap-2 mt-1 ml-4 text-[11px] font-bold text-brand-600 bg-brand-50/50 rounded px-1.5 w-fit border border-brand-100/50">
+                             ↳ ${ip} <span class="flex gap-1 filter grayscale-[0.3]">${icons}</span>
+                        </div>
+                    `;
+                });
+            }
+
+            return `
+                <div class="mb-3 group">
+                    <div class="flex justify-between items-center bg-gray-50 px-3 py-2 rounded text-sm border border-gray-100 shadow-sm overflow-hidden">
+                        <div class="flex-grow truncate mr-2">
+                            <span class="font-mono text-gray-700 text-xs sm:text-sm">${m.mac_address}</span>
+                            <span class="text-[10px] sm:text-xs text-gray-400 uppercase tracking-wide ml-1">(${m.interface_type})</span>
+                        </div>
+                        <button onclick="removeMac(${d.id}, ${m.id})" class="text-red-400 hover:text-red-600 text-lg font-bold px-1 transition-colors" title="Remove MAC">&times;</button>
+                    </div>
+                    ${liveHtml}
                 </div>
-                <button onclick="removeMac(${d.id}, ${m.id})" class="text-red-400 hover:text-red-600 text-lg font-bold px-1 transition-colors" title="Remove MAC">&times;</button>
-            </div>
-        `).join('');
+            `;
+        }).join('');
 
         const card = document.createElement('div');
         card.className = 'bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 flex flex-col h-full';
