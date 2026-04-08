@@ -8,6 +8,16 @@ const devicesContainer = document.getElementById('devices-container');
 // --- Application State ---
 let allDevices = [];
 let currentTagFilter = 'all';
+let expandedDeviceIds = new Set(); // Tracks which cards are open
+
+function toggleExpand(id) {
+    if (expandedDeviceIds.has(id)) {
+        expandedDeviceIds.delete(id);
+    } else {
+        expandedDeviceIds.add(id);
+    }
+    renderDevices(allDevices); // Re-render to show/hide details
+}
 
 function setFilter(tag) {
     currentTagFilter = tag;
@@ -257,100 +267,112 @@ function renderDevices(devices) {
         // --- APPLY THE FILTER ---
         if (currentTagFilter !== 'all') {
             const hasTags = d.tags && d.tags.length > 0;
-            if (currentTagFilter === 'no-tag' && hasTags) return; // Skip tagged devices
-            if (currentTagFilter !== 'no-tag' && (!hasTags || !d.tags.includes(currentTagFilter))) return; // Skip if it doesn't have the active tag
+            if (currentTagFilter === 'no-tag' && hasTags) return;
+            if (currentTagFilter !== 'no-tag' && (!hasTags || !d.tags.includes(currentTagFilter))) return;
         }
 
-        // Build Tags HTML for the card
-        const tagsPills = (d.tags || []).map(t =>
-            `<span class="bg-brand-100 text-brand-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide border border-brand-200">${t}</span>`
-        ).join(' ');
+        const isExpanded = expandedDeviceIds.has(d.id);
+        const hasLiveIPs = d.macs && d.macs.some(m => m.live_info && Object.keys(m.live_info.ips).length > 0);
 
-        // Build MAC list HTML with Live IP detection
-        const macsHtml = (d.macs || []).map(m => {
-            let liveHtml = '';
+        // Build Live IP Summary for the Collapsed View
+        let ipSummaryHtml = '';
+        const allFoundIPs = [];
+        (d.macs || []).forEach(m => {
             if (m.live_info && m.live_info.ips) {
-                // Loop through all IPs found for this MAC
                 Object.entries(m.live_info.ips).forEach(([ip, sources]) => {
                     const icons = sources.map(s => {
-                        if (s === 'static') return '<span title="Static Reservation">📌</span>';
-                        if (s === 'dhcp') return '<span title="DHCP Lease">⏳</span>';
-                        if (s === 'arp') return '<span title="Active on Network">📡</span>';
+                        if (s === 'static') return '📌';
+                        if (s === 'dhcp') return '⏳';
+                        if (s === 'arp') return '📡';
                         return '';
                     }).join('');
-
-                    liveHtml += `
-                        <div class="flex items-center gap-2 mt-1 ml-4 text-[11px] font-bold text-brand-600 bg-brand-50/50 rounded px-1.5 w-fit border border-brand-100/50">
-                             ↳ ${ip} <span class="flex gap-1 filter grayscale-[0.3]">${icons}</span>
-                        </div>
-                    `;
+                    allFoundIPs.push(`<span class="inline-flex items-center gap-1 mr-3">↳ ${ip} <span class="filter grayscale-[0.5] scale-90">${icons}</span></span>`);
                 });
             }
+        });
+        ipSummaryHtml = allFoundIPs.length > 0
+            ? `<div class="text-[10px] sm:text-xs font-mono text-brand-600 mt-1 flex flex-wrap">${allFoundIPs.join('')}</div>`
+            : `<div class="text-[10px] text-gray-400 italic mt-1">Device Offline</div>`;
 
-            return `
-                <div class="mb-3 group">
-                    <div class="flex justify-between items-center bg-gray-50 px-3 py-2 rounded text-sm border border-gray-100 shadow-sm overflow-hidden">
-                        <div class="flex-grow truncate mr-2">
-                            <span class="font-mono text-gray-700 text-xs sm:text-sm">${m.mac_address}</span>
-                            <span class="text-[10px] sm:text-xs text-gray-400 uppercase tracking-wide ml-1">(${m.interface_type})</span>
-                        </div>
-                        <button onclick="removeMac(${d.id}, ${m.id})" class="text-red-400 hover:text-red-600 text-lg font-bold px-1 transition-colors" title="Remove MAC">&times;</button>
-                    </div>
-                    ${liveHtml}
+        // Tags Pills HTML
+        const tagsPills = (d.tags || []).map(t =>
+            `<span class="bg-brand-100 text-brand-700 text-[9px] font-bold px-2 py-0.5 rounded-full border border-brand-200">${t}</span>`
+        ).join(' ');
+
+        // Full MAC List (Visible only when expanded)
+        const macsDetailHtml = (d.macs || []).map(m => `
+            <div class="bg-gray-50 px-3 py-2 rounded text-sm mb-2 border border-gray-100 shadow-sm">
+                <div class="flex justify-between items-center">
+                    <span class="font-mono text-gray-700 text-xs">${m.mac_address} <span class="text-[10px] text-gray-400">(${m.interface_type})</span></span>
+                    <button onclick="removeMac(${d.id}, ${m.id})" class="text-red-400 hover:text-red-600 font-bold">&times;</button>
                 </div>
-            `;
-        }).join('');
+            </div>
+        `).join('');
 
         const card = document.createElement('div');
-        card.className = 'bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 flex flex-col h-full';
+        // Dim the card if it's offline (no live IPs found)
+        card.className = `bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col transition-all duration-300 ${!hasLiveIPs ? 'opacity-70 grayscale-[0.2]' : ''}`;
 
         card.innerHTML = `
-            <div class="flex justify-between items-start mb-2">
-                <h2 class="text-lg font-bold text-gray-800 pr-2 truncate">${d.name}</h2>
-                <div class="relative inline-block w-12 flex-shrink-0 align-middle select-none transition duration-200 ease-in mt-0.5">
-                    <input type="checkbox" id="toggle-${d.id}" onchange="toggleBlock(${d.id}, this)" ${d.is_blocked ? 'checked' : ''} class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer z-10 transition-all duration-300"/>
-                    <label for="toggle-${d.id}" class="block overflow-hidden h-6 rounded-full ${d.is_blocked ? 'bg-red-500' : 'bg-green-500'} cursor-pointer transition-colors duration-300"></label>
+            <!-- SUMMARY VIEW (Always Visible) -->
+            <div class="p-4 sm:p-5">
+                <div class="flex justify-between items-start mb-1">
+                    <div class="flex-grow pr-2 truncate">
+                        <h2 class="text-lg font-bold text-gray-800 truncate">${d.name}</h2>
+                        <div class="flex flex-wrap gap-1 mt-1 min-h-[18px]">
+                            ${tagsPills}
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-4">
+                        <!-- Block Toggle -->
+                        <div class="relative inline-block w-10 flex-shrink-0 align-middle select-none">
+                            <input type="checkbox" id="toggle-${d.id}" onchange="toggleBlock(${d.id}, this)" ${d.is_blocked ? 'checked' : ''} class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer z-10 transition-all"/>
+                            <label for="toggle-${d.id}" class="block overflow-hidden h-5 rounded-full ${d.is_blocked ? 'bg-red-500' : 'bg-green-500'} cursor-pointer"></label>
+                        </div>
+
+                        <!-- Expand Chevron -->
+                        <button onclick="toggleExpand(${d.id})" class="text-gray-400 hover:text-brand-500 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </button>
+                    </div>
                 </div>
+
+                ${ipSummaryHtml}
             </div>
 
-            <!-- Tags Section -->
-            <div class="mb-4 min-h-[28px]">
-                <div id="tags-display-${d.id}" class="flex items-center flex-wrap gap-1">
-                    ${tagsPills}
-                    <button onclick="enableTagEdit(${d.id})" class="text-[10px] text-gray-400 hover:text-brand-600 ml-1 underline bg-gray-50 px-2 py-0.5 rounded border border-gray-200 transition-colors">Edit Tags</button>
+            <!-- DETAIL VIEW (Collapsible) -->
+            <div id="details-${d.id}" class="${isExpanded ? 'block' : 'hidden'} bg-gray-50/50 border-t border-gray-100 p-4 sm:p-5 rounded-b-xl">
+                
+                <!-- Inline Tag Edit -->
+                <div class="mb-5">
+                    <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Manage Tags</h3>
+                    <div id="tags-edit-${d.id}" class="flex items-center gap-1">
+                        <input type="text" id="tag-input-${d.id}" value="${(d.tags || []).join(', ')}" placeholder="kids, alex..." 
+                            class="flex-grow text-xs px-2 py-1.5 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                            onkeydown="if(event.key === 'Enter') saveTags(${d.id}); if(event.key === 'Escape') toggleExpand(${d.id});">
+                        <button onclick="saveTags(${d.id})" class="bg-brand-600 text-white text-[10px] font-bold px-3 py-1.5 rounded">Save</button>
+                    </div>
                 </div>
-                <div id="tags-edit-${d.id}" class="hidden flex items-center gap-1">
-                    <input type="text" id="tag-input-${d.id}" value="${(d.tags || []).join(', ')}" placeholder="e.g., kids, tablet" 
-                        class="flex-grow text-xs px-2 py-1.5 border border-brand-300 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 shadow-inner"
-                        onkeydown="if(event.key === 'Enter') saveTags(${d.id}); if(event.key === 'Escape') cancelTagEdit(${d.id});">
-                    <button onclick="saveTags(${d.id})" class="text-[10px] font-bold bg-green-500 text-white px-2 py-1.5 rounded hover:bg-green-600 shadow-sm transition-colors">Save</button>
-                    <button onclick="cancelTagEdit(${d.id})" class="text-[10px] font-bold bg-gray-200 text-gray-700 px-2 py-1.5 rounded hover:bg-gray-300 shadow-sm transition-colors">Cancel</button>
-                </div>
-            </div>
 
-            <div class="flex-grow mb-5">
-                <h3 class="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                    Registered MACs
-                    <span class="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-[10px]">${(d.macs || []).length}</span>
-                </h3>
-                <div class="space-y-1">
-                    ${macsHtml}
+                <!-- MAC Management -->
+                <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Registered MACs</h3>
+                ${macsDetailHtml}
+                
+                <div class="flex flex-col sm:flex-row gap-2 mt-4 pt-4 border-t border-gray-200">
+                    <input type="text" id="new-mac-${d.id}" placeholder="aa:bb:cc..." class="flex-grow text-sm px-3 py-2 border rounded-md bg-white">
+                    <div class="flex gap-2">
+                        <select id="new-type-${d.id}" class="text-sm border rounded-md bg-white px-2 py-2">
+                            <option value="WiFi">WiFi</option>
+                            <option value="Ethernet">Eth</option>
+                        </select>
+                        <button onclick="addMac(${d.id})" class="bg-brand-600 text-white text-sm font-bold py-2 px-4 rounded-md">Add</button>
+                    </div>
                 </div>
-            </div>
 
-            <div class="flex flex-col sm:flex-row gap-2 mt-auto pt-4 border-t border-gray-100">
-                <input type="text" id="new-mac-${d.id}" placeholder="aa:bb:cc:..." class="w-full sm:flex-grow font-mono text-sm px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500 transition">
-                <div class="flex gap-2 w-full sm:w-auto">
-                    <select id="new-type-${d.id}" class="flex-grow sm:w-auto text-sm border rounded-md bg-white px-2 py-2 focus:outline-none focus:ring-2 focus:ring-brand-500">
-                        <option value="WiFi">WiFi</option>
-                        <option value="Ethernet">Eth</option>
-                    </select>
-                    <button onclick="addMac(${d.id})" class="bg-brand-600 text-white text-sm font-bold py-2 px-4 rounded-md hover:bg-brand-500 transition shadow-sm whitespace-nowrap">Add</button>
+                <div class="mt-6 flex justify-end">
+                    <button onclick="deleteDevice(${d.id})" class="text-[10px] font-bold text-red-400 hover:text-red-600 uppercase tracking-widest transition-colors">Delete Profile</button>
                 </div>
-            </div>
-
-            <div class="mt-4 text-right">
-                <button onclick="deleteDevice(${d.id})" class="text-[11px] sm:text-xs font-semibold text-red-500 hover:text-red-700 hover:underline uppercase tracking-wide transition-colors">Delete Profile</button>
             </div>
         `;
         devicesContainer.appendChild(card);

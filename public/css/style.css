@@ -8,6 +8,12 @@
     right: 0;
     border-color: #68D391;
 }
-.toggle-checkbox:checked + .toggle-label {
-    background-color: #ef4444; /* Red when blocked */
+
+.toggle-checkbox:checked+.toggle-label {
+    background-color: #ef4444;
+    /* Red when blocked */
+}
+
+.transition-transform {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
